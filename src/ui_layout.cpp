@@ -66,7 +66,11 @@ void run_ui(std::shared_ptr<AppState> state, std::shared_ptr<SearchEngine> searc
             std::lock_guard<std::mutex> lock(state->data_mutex);
             file_menu_entries.clear();
             for (const auto& p : state->current_files) {
-                file_menu_entries.push_back(p.filename().string());
+                if (state->search_query.empty()) {
+                    file_menu_entries.push_back(p.filename().string());
+                } else {
+                    file_menu_entries.push_back(p.string());
+                }
             }
         }
         
@@ -83,7 +87,8 @@ void run_ui(std::shared_ptr<AppState> state, std::shared_ptr<SearchEngine> searc
         }
 
         auto drive_win = window(text(" Drives "), drive_menu->Render() | vscroll_indicator | frame);
-        auto file_win = window(text(" Files "), file_menu->Render() | vscroll_indicator | frame);
+        std::string mid_title = state->current_path.empty() ? " Files " : " " + state->current_path.string() + " ";
+        auto file_win = window(text(mid_title), file_menu->Render() | vscroll_indicator | frame);
         auto preview_win = window(text(" Preview "), paragraph(state->preview_content) | vscroll_indicator | frame);
         
         auto search_win = window(text(" Search "), search_input->Render());
@@ -107,12 +112,12 @@ void run_ui(std::shared_ptr<AppState> state, std::shared_ptr<SearchEngine> searc
             return true;
         }
         
-        // The search input handles character events and triggers on_change.
-        
         if (event == Event::Return || event == Event::ArrowRight) {
             if (state->active_pane == 0) { // Drives
                 std::string selected_drive = state->drives[state->selected_drive_index];
+                state->current_path = selected_drive;
                 search_engine->set_root(selected_drive);
+                state->selected_file_index = 0;
                 search_engine->update_search(); // Immediate update
                 state->active_pane = 1; // Move focus to files
                 return true;
@@ -120,8 +125,10 @@ void run_ui(std::shared_ptr<AppState> state, std::shared_ptr<SearchEngine> searc
                 if (!state->current_files.empty() && state->selected_file_index < state->current_files.size()) {
                     auto selected = state->current_files[state->selected_file_index];
                     if (std::filesystem::is_directory(selected)) {
+                        state->current_path = selected;
                         search_engine->set_root(selected);
                         state->search_query = ""; // Reset search
+                        state->selected_file_index = 0;
                         search_engine->update_search(); // Immediate update
                         return true;
                     }
@@ -131,7 +138,14 @@ void run_ui(std::shared_ptr<AppState> state, std::shared_ptr<SearchEngine> searc
         
         if (event == Event::ArrowLeft) {
             if (state->active_pane == 1) {
-                state->active_pane = 0;
+                auto parent = state->current_path.parent_path();
+                if (parent != state->current_path && state->current_path.has_parent_path()) {
+                    state->current_path = parent;
+                    state->selected_file_index = 0;
+                    search_engine->update_search();
+                } else {
+                    state->active_pane = 0;
+                }
                 return true;
             }
         }

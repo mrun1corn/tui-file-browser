@@ -41,12 +41,32 @@ void SearchEngine::update_search() {
     state->current_files.clear();
     std::string query = state->search_query;
     
-    for (const auto& p : path_cache) {
-        if (fuzzy_match(query, p.filename().string())) {
-            state->current_files.push_back(p);
+    if (query.empty()) {
+        // Folder-wise navigation: show direct children of state->current_path
+        if (!state->current_path.empty() && std::filesystem::exists(state->current_path) && std::filesystem::is_directory(state->current_path)) {
+            std::vector<std::filesystem::path> folders;
+            std::vector<std::filesystem::path> files;
+            try {
+                for (const auto& entry : std::filesystem::directory_iterator(state->current_path, std::filesystem::directory_options::skip_permission_denied)) {
+                    if (entry.is_directory()) folders.push_back(entry.path());
+                    else files.push_back(entry.path());
+                }
+            } catch (...) {}
+            // Sort alphabetically, folders first
+            std::sort(folders.begin(), folders.end());
+            std::sort(files.begin(), files.end());
+            state->current_files.insert(state->current_files.end(), folders.begin(), folders.end());
+            state->current_files.insert(state->current_files.end(), files.begin(), files.end());
         }
-        // Limit to prevent UI overload
-        if (state->current_files.size() > 1000) break;
+    } else {
+        // Global "Everything" style fuzzy search using background cache
+        for (const auto& p : path_cache) {
+            if (fuzzy_match(query, p.filename().string())) {
+                state->current_files.push_back(p);
+            }
+            // Limit to prevent UI overload
+            if (state->current_files.size() > 1000) break;
+        }
     }
 }
 

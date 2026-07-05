@@ -139,12 +139,24 @@ void run_ui(std::shared_ptr<AppState> state, std::shared_ptr<SearchEngine> searc
             } else if (state->active_pane == 1) { // Files
                 if (!state->current_files.empty() && state->selected_file_index < state->current_files.size()) {
                     auto selected = state->current_files[state->selected_file_index];
-                    if (std::filesystem::is_directory(selected)) {
+                    std::error_code ec;
+                    if (std::filesystem::is_directory(selected, ec)) {
                         state->current_path = selected;
                         search_engine->set_root(selected);
                         state->search_query = ""; // Reset search
                         state->selected_file_index = 0;
                         search_engine->update_search(); // Immediate update
+                        return true;
+                    } else {
+                        // It is a file (image, document, etc). Open it in the native OS viewer!
+#ifdef _WIN32
+                        std::string cmd = "start \"\" \"" + selected.string() + "\"";
+#elif __APPLE__
+                        std::string cmd = "open \"" + selected.string() + "\"";
+#else
+                        std::string cmd = "xdg-open \"" + selected.string() + "\" &";
+#endif
+                        std::system(cmd.c_str());
                         return true;
                     }
                 }

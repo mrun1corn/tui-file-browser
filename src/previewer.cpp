@@ -124,9 +124,9 @@ public:
             LOG("Chafa path resolved to: " + chafa_bin);
 
 #ifdef _WIN32
-            std::string cmd = chafa_bin + " --colors full --symbols vhalf+quad -s " + std::to_string(avail_w) + "x" + std::to_string(avail_h) + " \"" + path.string() + "\" 2>nul";
+            std::string cmd = chafa_bin + " --colors full -s " + std::to_string(avail_w) + "x" + std::to_string(avail_h) + " \"" + path.string() + "\" 2>nul";
 #else
-            std::string cmd = chafa_bin + " --colors full --symbols vhalf+quad -s " + std::to_string(avail_w) + "x" + std::to_string(avail_h) + " \"" + path.string() + "\" 2>/dev/null";
+            std::string cmd = chafa_bin + " --colors full -s " + std::to_string(avail_w) + "x" + std::to_string(avail_h) + " \"" + path.string() + "\" 2>/dev/null";
 #endif
             FILE* pipe = popen(cmd.c_str(), "r");
             if (pipe) {

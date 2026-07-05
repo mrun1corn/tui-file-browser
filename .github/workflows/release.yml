@@ -1,0 +1,41 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Configure CMake
+      run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+      
+    - name: Build
+      run: cmake --build build --config Release
+      
+    - name: Pack artifacts (Unix)
+      if: matrix.os != 'windows-latest'
+      run: tar -czvf tui_browser-${{ matrix.os }}.tar.gz -C build tui_browser
+      
+    - name: Pack artifacts (Windows)
+      if: matrix.os == 'windows-latest'
+      run: Compress-Archive -Path build\Release\tui_browser.exe -DestinationPath tui_browser-${{ matrix.os }}.zip
+      
+    - name: Upload Release Asset
+      uses: softprops/action-gh-release@v2
+      with:
+        files: |
+          *.tar.gz
+          *.zip

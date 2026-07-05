@@ -9,6 +9,18 @@
 #define popen _popen
 #define pclose _pclose
 #endif
+bool is_binary_file(const std::filesystem::path& path) {
+    std::ifstream file(path, std::ios::binary);
+    if (!file.is_open()) return false;
+    char buffer[1024];
+    file.read(buffer, sizeof(buffer));
+    std::streamsize bytes_read = file.gcount();
+    for (std::streamsize i = 0; i < bytes_read; ++i) {
+        if (buffer[i] == '\0') return true;
+    }
+    return false;
+}
+
 
 std::string Previewer::generate_preview(const std::filesystem::path& path) {
     std::error_code ec;
@@ -24,6 +36,10 @@ std::string Previewer::generate_preview(const std::filesystem::path& path) {
     if (ext == ".pdf") {
         return preview_pdf(path);
     } 
+    if (is_binary_file(path)) {
+        return "Binary file (Preview not supported)";
+    }
+
     // Fallback for most things is attempting to read as text (first 100 lines)
     return preview_text(path);
 }

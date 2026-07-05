@@ -18,6 +18,11 @@ void SearchEngine::set_root(const std::filesystem::path& root) {
     root_changed = true;
 }
 
+void SearchEngine::set_on_new_files(std::function<void()> cb) {
+    on_new_files = cb;
+}
+
+
 // Simple case-insensitive substring match
 bool fuzzy_match(const std::string& query, const std::string& text) {
     if (query.empty()) return true;
@@ -65,12 +70,22 @@ void SearchEngine::worker_thread() {
                     
                     if (stop_thread || root_changed) break;
 
+                    int current_size = 0;
                     {
                         std::lock_guard<std::mutex> lock(cache_mutex);
                         path_cache.push_back(it->path());
+                        current_size = path_cache.size();
+                    }
+                    
+                    if (current_size % 100 == 0 && on_new_files) {
+                        on_new_files();
                     }
                     
                     // Yield occasionally if we want to be nice, but this is a background thread
+                }
+                active_root.clear(); // Done indexing this root
+                if (on_new_files && !root_changed) {
+                    on_new_files();
                 }
             } catch (const std::filesystem::filesystem_error&) {
                 // Ignore access errors

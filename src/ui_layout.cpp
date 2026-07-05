@@ -34,7 +34,12 @@ void run_ui(std::shared_ptr<AppState> state, std::shared_ptr<SearchEngine> searc
     // Components
     auto drive_menu = Menu(&state->drives, &state->selected_drive_index);
     
-    // We need a vector of strings for the file menu
+    auto search_engine_ptr = search_engine.get();
+    search_engine->set_on_new_files([&screen, search_engine_ptr]() {
+        screen.Post([search_engine_ptr] {
+            search_engine_ptr->update_search();
+        });
+    });
     std::vector<std::string> file_menu_entries;
     auto file_menu = Menu(&file_menu_entries, &state->selected_file_index);
     
@@ -89,23 +94,26 @@ void run_ui(std::shared_ptr<AppState> state, std::shared_ptr<SearchEngine> searc
             preview_win | flex
         }) | flex;
 
+    // Handle global events (Tab to switch panes, Right to enter, etc.)
+
         return vbox({
             top_split,
             search_win | size(HEIGHT, EQUAL, 3)
         });
     });
-
-    // Handle global events (Tab to switch panes, Right to enter, etc.)
     auto event_handler = CatchEvent(renderer, [&](Event event) {
         if (event == Event::Tab) {
             state->active_pane = (state->active_pane + 1) % 3; // 0: drives, 1: files, 2: search
             return true;
         }
         
+        // The search input handles character events and triggers on_change.
+        
         if (event == Event::Return || event == Event::ArrowRight) {
             if (state->active_pane == 0) { // Drives
                 std::string selected_drive = state->drives[state->selected_drive_index];
                 search_engine->set_root(selected_drive);
+                search_engine->update_search(); // Immediate update
                 state->active_pane = 1; // Move focus to files
                 return true;
             } else if (state->active_pane == 1) { // Files
@@ -114,6 +122,7 @@ void run_ui(std::shared_ptr<AppState> state, std::shared_ptr<SearchEngine> searc
                     if (std::filesystem::is_directory(selected)) {
                         search_engine->set_root(selected);
                         state->search_query = ""; // Reset search
+                        search_engine->update_search(); // Immediate update
                         return true;
                     }
                 }
@@ -129,7 +138,6 @@ void run_ui(std::shared_ptr<AppState> state, std::shared_ptr<SearchEngine> searc
 
         return false; // event not fully handled, let components have it
     });
-
     // Custom focus logic based on active_pane
     auto focus_manager = Renderer(event_handler, [&] {
         if (state->active_pane == 0) {

@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <atomic>
 #include <memory>
+#include <functional>
 
 class SearchEngine {
 public:
@@ -12,6 +13,8 @@ public:
     ~SearchEngine();
 
     void set_root(const std::filesystem::path& root);
+    void set_on_new_files(std::function<void()> cb);
+
     void update_search();
 
 private:
@@ -22,6 +25,7 @@ private:
     
     std::filesystem::path current_root;
     std::atomic<bool> root_changed{false};
+    std::function<void()> on_new_files;
     std::atomic<bool> stop_thread{false};
     std::thread indexer;
     std::mutex cache_mutex;

@@ -10,6 +10,9 @@
 #include <ftxui/screen/screen.hpp>
 
 #define STB_IMAGE_IMPLEMENTATION
+#define STB_IMAGE_RESIZE_IMPLEMENTATION
+#include "stb_image_resize2.h"
+
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 
@@ -150,39 +153,26 @@ public:
             draw_w = std::max(1, (int)(width * scale));
             draw_h = std::max(1, (int)(height * scale));
             draw_h_chars = (draw_h + 1) / 2;
+            int target_h_pixels = draw_h_chars * 2; // ensure even height for half-blocks
 
             cached_colors.clear();
             cached_colors.reserve(draw_w * draw_h_chars);
 
+            // Use high-quality resizing library
+            std::vector<unsigned char> resized_data(draw_w * target_h_pixels * 3);
+            stbir_resize_uint8_linear(img_data.data(), width, height, 0,
+                                      resized_data.data(), draw_w, target_h_pixels, 0,
+                                      STBIR_RGB);
+
             for (int y = 0; y < draw_h_chars; ++y) {
                 for (int x = 0; x < draw_w; ++x) {
-                    auto get_avg_color = [&](int py) {
-                        int start_x = (int)(x / scale);
-                        int end_x = (int)((x + 1) / scale);
-                        int start_y = (int)(py / scale);
-                        int end_y = (int)((py + 1) / scale);
+                    int idx1 = (y * 2 * draw_w + x) * 3;
+                    int idx2 = ((y * 2 + 1) * draw_w + x) * 3;
 
-                        end_x = std::min(end_x, width);
-                        end_y = std::min(end_y, height);
-                        if (start_x >= end_x) end_x = start_x + 1;
-                        if (start_y >= end_y) end_y = start_y + 1;
+                    auto color1 = ftxui::Color::RGB(resized_data[idx1], resized_data[idx1+1], resized_data[idx1+2]);
+                    auto color2 = ftxui::Color::RGB(resized_data[idx2], resized_data[idx2+1], resized_data[idx2+2]);
 
-                        long long r = 0, g = 0, b = 0;
-                        int count = 0;
-                        for (int sy = start_y; sy < end_y; ++sy) {
-                            for (int sx = start_x; sx < end_x; ++sx) {
-                                int idx = (sy * width + sx) * 3;
-                                r += img_data[idx];
-                                g += img_data[idx+1];
-                                b += img_data[idx+2];
-                                count++;
-                            }
-                        }
-                        if (count > 0) return ftxui::Color::RGB(r/count, g/count, b/count);
-                        return ftxui::Color::RGB(0,0,0);
-                    };
-
-                    cached_colors.push_back({get_avg_color(y * 2), get_avg_color(y * 2 + 1)});
+                    cached_colors.push_back({color1, color2});
                 }
             }
         }

@@ -27,6 +27,36 @@ std::vector<std::string> get_drives() {
 #endif
     return drives;
 }
+class FocusablePreview : public ComponentBase {
+public:
+    FocusablePreview(std::shared_ptr<AppState> state) : state_(state) {}
+    bool Focusable() const override { return true; }
+    
+    Element Render() override {
+        ftxui::Element content = state_->preview_element;
+        if (!state_->is_image_preview) {
+            content = content | focusPositionRelative(0, state_->preview_scroll / 100.0f) | vscroll_indicator | frame;
+        }
+        
+        return window(text(" Preview ") | (Focused() ? bold : dim), content);
+    }
+    
+    bool OnEvent(Event event) override {
+        if (!Focused()) return false;
+        if (event == Event::ArrowDown || event == Event::PageDown || event == Event::Character('j')) {
+            state_->preview_scroll = std::min(100, state_->preview_scroll + 10);
+            return true;
+        }
+        if (event == Event::ArrowUp || event == Event::PageUp || event == Event::Character('k')) {
+            state_->preview_scroll = std::max(0, state_->preview_scroll - 10);
+            return true;
+        }
+        return false;
+    }
+
+private:
+    std::shared_ptr<AppState> state_;
+};
 
 void run_ui(std::shared_ptr<AppState> state, std::shared_ptr<SearchEngine> search_engine) {
     auto screen = ScreenInteractive::Fullscreen();
@@ -53,9 +83,12 @@ void run_ui(std::shared_ptr<AppState> state, std::shared_ptr<SearchEngine> searc
     int horizontal_selector = 0;
     int vertical_selector = 0;
 
+    auto preview_container = std::make_shared<FocusablePreview>(state);
+
     auto panes = Container::Horizontal({
         drive_menu,
-        file_menu
+        file_menu,
+        preview_container
     }, &horizontal_selector);
 
     auto main_container = Container::Vertical({
@@ -66,6 +99,7 @@ void run_ui(std::shared_ptr<AppState> state, std::shared_ptr<SearchEngine> searc
     auto update_selectors = [&] {
         if (state->active_pane == 0) { horizontal_selector = 0; vertical_selector = 0; }
         else if (state->active_pane == 1) { horizontal_selector = 1; vertical_selector = 0; }
+        else if (state->active_pane == 2) { horizontal_selector = 2; vertical_selector = 0; }
         else { vertical_selector = 1; }
     };
     update_selectors();
@@ -97,6 +131,7 @@ void run_ui(std::shared_ptr<AppState> state, std::shared_ptr<SearchEngine> searc
         if (!state->current_files.empty() && state->selected_file_index >= 0 && state->selected_file_index < state->current_files.size()) {
             std::filesystem::path selected = state->current_files[state->selected_file_index];
             LOG("Selected file changed: " + selected.u8string());
+            state->preview_scroll = 0; // Reset scroll when file changes
             state->preview_element = Previewer::generate_preview(selected, state->is_image_preview);
             LOG("Preview content generated.");
         }
@@ -105,19 +140,14 @@ void run_ui(std::shared_ptr<AppState> state, std::shared_ptr<SearchEngine> searc
         std::string mid_title = state->current_path.empty() ? " Files " : " " + state->current_path.u8string() + " ";
         auto file_win = window(text(mid_title), file_menu->Render() | vscroll_indicator | frame);
         
-        ftxui::Element preview_content_element = state->preview_element;
-        if (!state->is_image_preview) {
-            preview_content_element = preview_content_element | vscroll_indicator | frame;
-        }
-        auto preview_win = window(text(" Preview "), preview_content_element);
-        
-        auto search_win = window(text(" Search "), search_input->Render());
-
         auto top_split = hbox({
             drive_win | size(WIDTH, EQUAL, left_size),
             file_win | size(WIDTH, EQUAL, mid_size),
-            preview_win | flex
+            preview_container->Render() | flex
         }) | flex;
+        
+        auto search_win = window(text(" Search "), search_input->Render());
+
 
     // Handle global events (Tab to switch panes, Right to enter, etc.)
 
@@ -128,7 +158,7 @@ void run_ui(std::shared_ptr<AppState> state, std::shared_ptr<SearchEngine> searc
     });
     auto event_handler = CatchEvent(renderer, [&](Event event) {
         if (event == Event::Tab) {
-            state->active_pane = (state->active_pane + 1) % 3; // 0: drives, 1: files, 2: search
+            state->active_pane = (state->active_pane + 1) % 4; // 0: drives, 1: files, 2: preview, 3: search
             return true;
         }
         

@@ -23,6 +23,7 @@ struct AppState {
     
     ftxui::Element preview_element = ftxui::text("");
     bool is_image_preview = false;
+    int preview_scroll = 0;
     std::string preview_content = "";
     
     // Threading

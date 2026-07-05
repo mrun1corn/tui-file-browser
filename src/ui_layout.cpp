@@ -1,6 +1,8 @@
 #include "logger.hpp"
 #include "ui_layout.hpp"
 #include "previewer.hpp"
+#include "process_manager.hpp"
+
 #include <ftxui/component/component.hpp>
 #include <ftxui/component/screen_interactive.hpp>
 #include <ftxui/dom/elements.hpp>
@@ -11,6 +13,22 @@
 #endif
 
 using namespace ftxui;
+
+std::string find_ffplay_path() {
+    std::error_code ec;
+    if (std::filesystem::exists("ffplay.exe", ec)) return "ffplay.exe";
+    if (std::filesystem::exists("build/Release/ffplay.exe", ec)) return "build/Release/ffplay.exe";
+    
+    char* user_profile = std::getenv("USERPROFILE");
+    if (user_profile) {
+        std::filesystem::path winget_link = std::filesystem::path(user_profile) / "AppData" / "Local" / "Microsoft" / "WinGet" / "Links" / "ffplay.exe";
+        if (std::filesystem::exists(winget_link, ec)) {
+            return "\"" + winget_link.string() + "\"";
+        }
+    }
+    
+    return "ffplay"; // Fallback to PATH
+}
 
 std::vector<std::string> get_drives() {
     std::vector<std::string> drives;
@@ -65,6 +83,8 @@ private:
     std::function<void()> on_scroll_;
 };
 void run_ui(std::shared_ptr<AppState> state, std::shared_ptr<SearchEngine> search_engine) {
+    int last_selected_index = -1;
+
     auto screen = ScreenInteractive::Fullscreen();
     state->drives = get_drives();
     
@@ -138,6 +158,10 @@ void run_ui(std::shared_ptr<AppState> state, std::shared_ptr<SearchEngine> searc
         // Update preview
         if (!state->current_files.empty() && state->selected_file_index >= 0 && state->selected_file_index < state->current_files.size()) {
             std::filesystem::path selected = state->current_files[state->selected_file_index];
+            if (state->selected_file_index != last_selected_index) {
+                last_selected_index = state->selected_file_index;
+                ProcessManager::get_instance().kill_active_previews();
+            }
             LOG("Selected file changed: " + selected.u8string());
             state->preview_scroll = 0; // Reset scroll when file changes
             state->preview_element = Previewer::generate_preview(selected, state->is_image_preview);
@@ -168,6 +192,26 @@ void run_ui(std::shared_ptr<AppState> state, std::shared_ptr<SearchEngine> searc
         if (event == Event::Tab) {
             state->active_pane = (state->active_pane + 1) % 4; // 0: drives, 1: files, 2: preview, 3: search
             return true;
+        }
+        
+        if (state->active_pane == 1 && (event == Event::Character('p') || event == Event::Character('P'))) {
+            if (!state->current_files.empty() && state->selected_file_index >= 0 && state->selected_file_index < state->current_files.size()) {
+                auto selected = state->current_files[state->selected_file_index];
+                std::string ext = selected.extension().string();
+                std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+                
+                if (ext == ".mp3" || ext == ".wav" || ext == ".flac" || ext == ".ogg" || ext == ".m4a") {
+                    if (ProcessManager::get_instance().has_active_previews()) {
+                        ProcessManager::get_instance().kill_active_previews();
+                    } else {
+                        ProcessManager::get_instance().spawn(find_ffplay_path() + " -nodisp -autoexit \"" + selected.string() + "\"", true);
+                    }
+                    return true;
+                } else if (ext == ".mp4" || ext == ".mkv" || ext == ".avi" || ext == ".mov" || ext == ".wmv" || ext == ".flv") {
+                    ProcessManager::get_instance().spawn(find_ffplay_path() + " -autoexit \"" + selected.string() + "\"", false);
+                    return true;
+                }
+            }
         }
         
         if (event == Event::Return) {
@@ -258,4 +302,5 @@ void run_ui(std::shared_ptr<AppState> state, std::shared_ptr<SearchEngine> searc
     });
     // Start UI
     screen.Loop(event_handler);
+    ProcessManager::get_instance().cleanup();
 }

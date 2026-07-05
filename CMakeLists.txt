@@ -18,7 +18,13 @@ add_executable(tui_browser
     src/ui_layout.cpp
     src/search_engine.cpp
     src/previewer.cpp
+    src/process_manager.cpp
 )
-
 target_include_directories(tui_browser PRIVATE src)
 target_link_libraries(tui_browser PRIVATE ftxui::screen ftxui::dom ftxui::component)
+
+add_executable(test_process_manager
+    test_process_manager.cpp
+    src/process_manager.cpp
+)
+target_include_directories(test_process_manager PRIVATE src)

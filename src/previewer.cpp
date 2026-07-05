@@ -6,7 +6,10 @@
 #include <memory>
 #include <algorithm>
 #include <sstream>
+#include <ftxui/component/component.hpp>
+#include <ftxui/screen/screen.hpp>
 
+#define STB_IMAGE_IMPLEMENTATION
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 
@@ -117,6 +120,58 @@ ftxui::Element Previewer::preview_pdf(const std::filesystem::path& path) {
     return ftxui::vbox(std::move(lines));
 }
 
+class ImageElement : public ftxui::Node {
+public:
+    ImageElement(int w, int h, std::vector<unsigned char> data) 
+        : width(w), height(h), img_data(std::move(data)) {}
+
+    void ComputeRequirement() override {
+        requirement_.min_x = 10;
+        requirement_.min_y = 10;
+        requirement_.flex_grow_x = 1;
+        requirement_.flex_grow_y = 1;
+        requirement_.flex_shrink_x = 1;
+        requirement_.flex_shrink_y = 1;
+    }
+
+    void Render(ftxui::Screen& screen) override {
+        int avail_w = box_.x_max - box_.x_min + 1;
+        int avail_h = box_.y_max - box_.y_min + 1;
+        if (avail_w <= 0 || avail_h <= 0) return;
+
+        float scale_w = (float)avail_w / width;
+        float scale_h = (float)(avail_h * 2) / height;
+        float scale = std::min(scale_w, scale_h);
+        
+        int draw_w = std::max(1, (int)(width * scale));
+        int draw_h = std::max(1, (int)(height * scale));
+        int draw_h_chars = (draw_h + 1) / 2;
+
+        int offset_x = box_.x_min + (avail_w - draw_w) / 2;
+        int offset_y = box_.y_min + (avail_h - draw_h_chars) / 2;
+
+        for (int y = 0; y < draw_h_chars; ++y) {
+            for (int x = 0; x < draw_w; ++x) {
+                int src_x = std::min((int)(x / scale), width - 1);
+                int src_y1 = std::min((int)(y * 2 / scale), height - 1);
+                int src_y2 = std::min((int)((y * 2 + 1) / scale), height - 1);
+                
+                int idx1 = (src_y1 * width + src_x) * 3;
+                int idx2 = (src_y2 * width + src_x) * 3;
+
+                auto& pixel = screen.PixelAt(offset_x + x, offset_y + y);
+                pixel.character = "▀";
+                pixel.foreground_color = ftxui::Color::RGB(img_data[idx1], img_data[idx1+1], img_data[idx1+2]);
+                pixel.background_color = ftxui::Color::RGB(img_data[idx2], img_data[idx2+1], img_data[idx2+2]);
+            }
+        }
+    }
+
+private:
+    int width, height;
+    std::vector<unsigned char> img_data;
+};
+
 ftxui::Element Previewer::preview_image(const std::filesystem::path& path) {
     int width, height, channels;
     unsigned char* data = stbi_load(path.u8string().c_str(), &width, &height, &channels, 3);
@@ -124,42 +179,12 @@ ftxui::Element Previewer::preview_image(const std::filesystem::path& path) {
         return ftxui::text("Failed to load image");
     }
 
-    int max_w = 80;
-    int max_h = 40;
-    float scale = 1.0f;
-    if (width > max_w || height > max_h * 2) {
-        float scale_w = (float)max_w / width;
-        float scale_h = (float)(max_h * 2) / height;
-        scale = std::min(scale_w, scale_h);
-    }
-
-    int scaled_w = std::max(1, (int)(width * scale));
-    int scaled_h = std::max(1, (int)(height * scale));
-
-    ftxui::Elements rows;
-    for (int y = 0; y < scaled_h; y += 2) {
-        ftxui::Elements cols;
-        for (int x = 0; x < scaled_w; ++x) {
-            int src_x = std::min((int)(x / scale), width - 1);
-            int src_y1 = std::min((int)(y / scale), height - 1);
-            int src_y2 = std::min((int)((y + 1) / scale), height - 1);
-
-            int idx1 = (src_y1 * width + src_x) * 3;
-            int idx2 = (src_y2 * width + src_x) * 3;
-
-            auto color1 = ftxui::Color::RGB(data[idx1], data[idx1+1], data[idx1+2]);
-            auto color2 = ftxui::Color::RGB(data[idx2], data[idx2+1], data[idx2+2]);
-
-            cols.push_back(ftxui::text("▀") | ftxui::color(color1) | ftxui::bgcolor(color2));
-        }
-        rows.push_back(ftxui::hbox(std::move(cols)));
-    }
-
+    std::vector<unsigned char> img_vec(data, data + (width * height * 3));
     stbi_image_free(data);
     
-    // Add file info header
+    auto img_node = std::make_shared<ImageElement>(width, height, std::move(img_vec));
     auto info = ftxui::text("Image: " + std::to_string(width) + "x" + std::to_string(height));
-    return ftxui::vbox({info, ftxui::separatorEmpty(), ftxui::vbox(std::move(rows))});
+    return ftxui::vbox({info, ftxui::separatorEmpty(), ftxui::Element(img_node)});
 }
 
 ftxui::Element Previewer::preview_directory(const std::filesystem::path& path) {

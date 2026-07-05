@@ -11,9 +11,10 @@
 #endif
 
 std::string Previewer::generate_preview(const std::filesystem::path& path) {
-    if (!std::filesystem::exists(path)) return "File does not exist.";
+    std::error_code ec;
+    if (!std::filesystem::exists(path, ec)) return "File does not exist or access denied.";
 
-    if (std::filesystem::is_directory(path)) {
+    if (std::filesystem::is_directory(path, ec)) {
         return preview_directory(path);
     }
 
@@ -76,7 +77,9 @@ std::string Previewer::preview_pdf(const std::filesystem::path& path) {
 std::string Previewer::preview_directory(const std::filesystem::path& path) {
     int item_count = 0;
     try {
-        for (const auto& entry : std::filesystem::directory_iterator(path)) {
+        std::error_code ec;
+        for (const auto& entry : std::filesystem::directory_iterator(path, std::filesystem::directory_options::skip_permission_denied, ec)) {
+            if (ec) break;
             item_count++;
             if (item_count > 1000) break; // Don't count forever
         }

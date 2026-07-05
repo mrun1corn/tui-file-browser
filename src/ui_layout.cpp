@@ -49,18 +49,32 @@ void run_ui(std::shared_ptr<AppState> state, std::shared_ptr<SearchEngine> searc
         search_engine->update_search();
     };
     auto search_input = Input(&state->search_query, "Type to search...", search_option);
+    int horizontal_selector = 0;
+    int vertical_selector = 0;
+
+    auto panes = Container::Horizontal({
+        drive_menu,
+        file_menu
+    }, &horizontal_selector);
+
     auto main_container = Container::Vertical({
-        Container::Horizontal({
-            drive_menu,
-            file_menu
-        }),
+        panes,
         search_input
-    });
+    }, &vertical_selector);
+    
+    auto update_selectors = [&] {
+        if (state->active_pane == 0) { horizontal_selector = 0; vertical_selector = 0; }
+        else if (state->active_pane == 1) { horizontal_selector = 1; vertical_selector = 0; }
+        else { vertical_selector = 1; }
+    };
+    update_selectors();
+
 
     int left_size = 20;
     int mid_size = 40;
 
     auto renderer = Renderer(main_container, [&] {
+        update_selectors();
         // Sync files list from state
         {
             std::lock_guard<std::mutex> lock(state->data_mutex);
@@ -152,18 +166,6 @@ void run_ui(std::shared_ptr<AppState> state, std::shared_ptr<SearchEngine> searc
 
         return false; // event not fully handled, let components have it
     });
-    // Custom focus logic based on active_pane
-    auto focus_manager = Renderer(event_handler, [&] {
-        if (state->active_pane == 0) {
-            main_container->SetActiveChild(drive_menu); // doesn't strictly work like this in FTXUI 5.0, need a better way.
-        } else if (state->active_pane == 1) {
-            main_container->SetActiveChild(file_menu);
-        } else {
-            main_container->SetActiveChild(search_input);
-        }
-        return event_handler->Render();
-    });
-
     // Start UI
-    screen.Loop(focus_manager);
+    screen.Loop(event_handler);
 }

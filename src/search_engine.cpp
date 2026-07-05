@@ -43,12 +43,15 @@ void SearchEngine::update_search() {
     
     if (query.empty()) {
         // Folder-wise navigation: show direct children of state->current_path
-        if (!state->current_path.empty() && std::filesystem::exists(state->current_path) && std::filesystem::is_directory(state->current_path)) {
+        std::error_code ec;
+        if (!state->current_path.empty() && std::filesystem::exists(state->current_path, ec) && std::filesystem::is_directory(state->current_path, ec)) {
             std::vector<std::filesystem::path> folders;
             std::vector<std::filesystem::path> files;
             try {
-                for (const auto& entry : std::filesystem::directory_iterator(state->current_path, std::filesystem::directory_options::skip_permission_denied)) {
-                    if (entry.is_directory()) folders.push_back(entry.path());
+                for (const auto& entry : std::filesystem::directory_iterator(state->current_path, std::filesystem::directory_options::skip_permission_denied, ec)) {
+                    if (ec) break;
+                    std::error_code ec_entry;
+                    if (entry.is_directory(ec_entry)) folders.push_back(entry.path());
                     else files.push_back(entry.path());
                 }
             } catch (...) {}

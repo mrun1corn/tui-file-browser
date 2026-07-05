@@ -29,13 +29,17 @@ std::vector<std::string> get_drives() {
 }
 class FocusablePreview : public ComponentBase {
 public:
-    FocusablePreview(std::shared_ptr<AppState> state) : state_(state) {}
+    FocusablePreview(std::shared_ptr<AppState> state, std::function<void()> on_scroll) 
+        : state_(state), on_scroll_(on_scroll) {}
     bool Focusable() const override { return true; }
     
     Element Render() override {
         ftxui::Element content = state_->preview_element;
         if (!state_->is_image_preview) {
-            content = content | focusPositionRelative(0, state_->preview_scroll / 100.0f) | vscroll_indicator | frame;
+            if (Focused()) {
+                content = content | focusPositionRelative(0, state_->preview_scroll / 100.0f) | ftxui::focus;
+            }
+            content = content | vscroll_indicator | frame;
         }
         
         return window(text(" Preview ") | (Focused() ? bold : dim), content);
@@ -45,10 +49,12 @@ public:
         if (!Focused()) return false;
         if (event == Event::ArrowDown || event == Event::PageDown || event == Event::Character('j')) {
             state_->preview_scroll = std::min(100, state_->preview_scroll + 10);
+            if (on_scroll_) on_scroll_();
             return true;
         }
         if (event == Event::ArrowUp || event == Event::PageUp || event == Event::Character('k')) {
             state_->preview_scroll = std::max(0, state_->preview_scroll - 10);
+            if (on_scroll_) on_scroll_();
             return true;
         }
         return false;
@@ -56,8 +62,8 @@ public:
 
 private:
     std::shared_ptr<AppState> state_;
+    std::function<void()> on_scroll_;
 };
-
 void run_ui(std::shared_ptr<AppState> state, std::shared_ptr<SearchEngine> search_engine) {
     auto screen = ScreenInteractive::Fullscreen();
     state->drives = get_drives();
@@ -83,7 +89,9 @@ void run_ui(std::shared_ptr<AppState> state, std::shared_ptr<SearchEngine> searc
     int horizontal_selector = 0;
     int vertical_selector = 0;
 
-    auto preview_container = std::make_shared<FocusablePreview>(state);
+    auto preview_container = std::make_shared<FocusablePreview>(state, [&] {
+        screen.Post([]{});
+    });
 
     auto panes = Container::Horizontal({
         drive_menu,

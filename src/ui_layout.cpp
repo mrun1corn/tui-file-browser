@@ -162,7 +162,7 @@ void run_ui(std::shared_ptr<AppState> state, std::shared_ptr<SearchEngine> searc
             return true;
         }
         
-        if (event == Event::Return || event == Event::ArrowRight) {
+        if (event == Event::Return) {
             if (state->active_pane == 0) { // Drives
                 std::string selected_drive = state->drives[state->selected_drive_index];
                 state->current_path = selected_drive;
@@ -183,7 +183,7 @@ void run_ui(std::shared_ptr<AppState> state, std::shared_ptr<SearchEngine> searc
                         search_engine->update_search(); // Immediate update
                         return true;
                     } else {
-                        // It is a file (image, document, etc). Open it in the native OS viewer!
+                        // Open it in the native OS viewer!
 #ifdef _WIN32
                         std::string cmd = "start \"\" \"" + selected.string() + "\"";
 #elif __APPLE__
@@ -192,6 +192,35 @@ void run_ui(std::shared_ptr<AppState> state, std::shared_ptr<SearchEngine> searc
                         std::string cmd = "xdg-open \"" + selected.string() + "\" &";
 #endif
                         std::system(cmd.c_str());
+                        return true;
+                    }
+                }
+            }
+        }
+
+        if (event == Event::ArrowRight) {
+            if (state->active_pane == 0) { // Drives
+                std::string selected_drive = state->drives[state->selected_drive_index];
+                state->current_path = selected_drive;
+                search_engine->set_root(selected_drive);
+                state->selected_file_index = 0;
+                search_engine->update_search(); // Immediate update
+                state->active_pane = 1; // Move focus to files
+                return true;
+            } else if (state->active_pane == 1) { // Files
+                if (!state->current_files.empty() && state->selected_file_index < state->current_files.size()) {
+                    auto selected = state->current_files[state->selected_file_index];
+                    std::error_code ec;
+                    if (std::filesystem::is_directory(selected, ec)) {
+                        state->current_path = selected;
+                        search_engine->set_root(selected);
+                        state->search_query = ""; // Reset search
+                        state->selected_file_index = 0;
+                        search_engine->update_search(); // Immediate update
+                        return true;
+                    } else {
+                        // It is a file: move focus to the Preview pane for scrolling!
+                        state->active_pane = 2;
                         return true;
                     }
                 }
@@ -209,8 +238,13 @@ void run_ui(std::shared_ptr<AppState> state, std::shared_ptr<SearchEngine> searc
                     state->active_pane = 0;
                 }
                 return true;
+            } else if (state->active_pane == 2) {
+                // Left arrow inside Preview pane: return focus to the Files list!
+                state->active_pane = 1;
+                return true;
             }
         }
+
 
         return false; // event not fully handled, let components have it
     });

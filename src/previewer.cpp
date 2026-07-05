@@ -215,7 +215,7 @@ ftxui::Element Previewer::preview_image(const std::filesystem::path& path) {
     
     auto img_node = std::make_shared<ImageElement>(width, height, std::move(img_vec));
     auto info = ftxui::text("Image: " + std::to_string(width) + "x" + std::to_string(height));
-    return ftxui::vbox({info, ftxui::separatorEmpty(), ftxui::Element(img_node)});
+    return ftxui::vbox({info, ftxui::separatorEmpty(), ftxui::Element(img_node) | ftxui::flex}) | ftxui::flex;
 }
 
 ftxui::Element Previewer::preview_directory(const std::filesystem::path& path) {

@@ -1,3 +1,4 @@
+#include "logger.hpp"
 #include "ui_layout.hpp"
 #include "previewer.hpp"
 #include <ftxui/component/component.hpp>
@@ -81,9 +82,9 @@ void run_ui(std::shared_ptr<AppState> state, std::shared_ptr<SearchEngine> searc
             file_menu_entries.clear();
             for (const auto& p : state->current_files) {
                 if (state->search_query.empty()) {
-                    file_menu_entries.push_back(p.filename().string());
+                    file_menu_entries.push_back(p.filename().u8string());
                 } else {
-                    file_menu_entries.push_back(p.string());
+                    file_menu_entries.push_back(p.u8string());
                 }
             }
         }
@@ -95,13 +96,13 @@ void run_ui(std::shared_ptr<AppState> state, std::shared_ptr<SearchEngine> searc
         // Update preview
         if (!state->current_files.empty() && state->selected_file_index >= 0 && state->selected_file_index < state->current_files.size()) {
             std::filesystem::path selected = state->current_files[state->selected_file_index];
+            LOG("Selected file changed: " + selected.u8string());
             state->preview_content = Previewer::generate_preview(selected);
-        } else {
-            state->preview_content = "";
+            LOG("Preview content generated. Size: " + std::to_string(state->preview_content.size()));
         }
 
         auto drive_win = window(text(" Drives "), drive_menu->Render() | vscroll_indicator | frame);
-        std::string mid_title = state->current_path.empty() ? " Files " : " " + state->current_path.string() + " ";
+        std::string mid_title = state->current_path.empty() ? " Files " : " " + state->current_path.u8string() + " ";
         auto file_win = window(text(mid_title), file_menu->Render() | vscroll_indicator | frame);
         auto preview_win = window(text(" Preview "), paragraph(state->preview_content) | vscroll_indicator | frame);
         

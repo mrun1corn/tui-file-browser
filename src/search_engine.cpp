@@ -64,7 +64,7 @@ void SearchEngine::update_search() {
     } else {
         // Global "Everything" style fuzzy search using background cache
         for (const auto& p : path_cache) {
-            if (fuzzy_match(query, p.filename().string())) {
+            if (fuzzy_match(query, p.filename().u8string())) {
                 state->current_files.push_back(p);
             }
             // Limit to prevent UI overload
@@ -103,15 +103,17 @@ void SearchEngine::worker_thread() {
                     if (current_size % 100 == 0 && on_new_files) {
                         on_new_files();
                     }
-                    
-                    // Yield occasionally if we want to be nice, but this is a background thread
                 }
-                active_root.clear(); // Done indexing this root
-                if (on_new_files && !root_changed) {
-                    on_new_files();
-                }
-            } catch (const std::filesystem::filesystem_error&) {
-                // Ignore access errors
+            } catch (...) {
+                // Catch ALL exceptions to prevent thread death.
+                // If we hit an unrecoverable access error, we just stop indexing this tree.
+            }
+            
+            // CRITICAL: Always clear the root so we don't infinitely retry and cause an OOM crash!
+            active_root.clear(); 
+            
+            if (on_new_files && !root_changed) {
+                on_new_files();
             }
         } else {
             std::this_thread::sleep_for(std::chrono::milliseconds(50));

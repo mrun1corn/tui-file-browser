@@ -12,17 +12,6 @@
 #include <ftxui/screen/screen.hpp>
 #include <mutex>
 #include <thread>
-
-#ifdef min
-#undef min
-#endif
-#ifdef max
-#undef max
-#endif
-
-#ifdef RGB
-#undef RGB
-#endif
 #include <atomic>
 
 #define STB_IMAGE_IMPLEMENTATION
@@ -35,6 +24,16 @@
 #ifdef _WIN32
 #define popen _popen
 #define pclose _pclose
+#endif
+
+#ifdef min
+#undef min
+#endif
+#ifdef max
+#undef max
+#endif
+#ifdef RGB
+#undef RGB
 #endif
 
 std::mutex active_preview_mtx;
@@ -151,31 +150,39 @@ public:
                         if (output[i] == '\033' && i + 1 < output.size() && output[i+1] == '[') {
                             i += 2;
                             std::string code;
-                            while (i < output.size() && output[i] != 'm') {
-                                code += output[i];
+                            char terminator = '\0';
+                            while (i < output.size()) {
+                                char c = output[i];
+                                if (c >= 0x40 && c <= 0x7E) {
+                                    terminator = c;
+                                    i++; // consume terminator
+                                    break;
+                                }
+                                code += c;
                                 i++;
                             }
-                            i++; // skip 'm'
                             
-                            std::stringstream ss(code);
-                            std::string token;
-                            std::vector<int> vals;
-                            while (std::getline(ss, token, ';')) {
-                                try { vals.push_back(std::stoi(token)); } catch(...) {}
-                            }
-                            if (vals.empty()) continue;
-                            
-                            if (vals[0] == 0) {
-                                fg = ftxui::Color::Default;
-                                bg = ftxui::Color::Default;
-                            } else if (vals[0] == 39) {
-                                fg = ftxui::Color::Default;
-                            } else if (vals[0] == 49) {
-                                bg = ftxui::Color::Default;
-                            } else if (vals[0] == 38 && vals.size() >= 5 && vals[1] == 2) {
-                                fg = ftxui::Color::RGB(vals[2], vals[3], vals[4]);
-                            } else if (vals[0] == 48 && vals.size() >= 5 && vals[1] == 2) {
-                                bg = ftxui::Color::RGB(vals[2], vals[3], vals[4]);
+                            if (terminator == 'm') {
+                                std::stringstream ss(code);
+                                std::string token;
+                                std::vector<int> vals;
+                                while (std::getline(ss, token, ';')) {
+                                    try { vals.push_back(std::stoi(token)); } catch(...) {}
+                                }
+                                if (!vals.empty()) {
+                                    if (vals[0] == 0) {
+                                        fg = ftxui::Color::Default;
+                                        bg = ftxui::Color::Default;
+                                    } else if (vals[0] == 39) {
+                                        fg = ftxui::Color::Default;
+                                    } else if (vals[0] == 49) {
+                                        bg = ftxui::Color::Default;
+                                    } else if (vals[0] == 38 && vals.size() >= 5 && vals[1] == 2) {
+                                        fg = ftxui::Color::RGB(vals[2], vals[3], vals[4]);
+                                    } else if (vals[0] == 48 && vals.size() >= 5 && vals[1] == 2) {
+                                        bg = ftxui::Color::RGB(vals[2], vals[3], vals[4]);
+                                    }
+                                }
                             }
                         } else if (output[i] == '\n') {
                             temp_grid.push_back(std::move(current_row));
@@ -205,6 +212,7 @@ public:
                 }
             }
 
+            // Fallback to stb_image_resize if chafa failed or isn't installed
             if (!chafa_success) {
                 LOG("Chafa execution FAILED. Falling back to stb_image_resize.");
                 float scale_w = (float)avail_w / width;

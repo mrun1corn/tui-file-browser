@@ -169,18 +169,27 @@ public:
                                 while (std::getline(ss, token, ';')) {
                                     try { vals.push_back(std::stoi(token)); } catch(...) {}
                                 }
-                                if (!vals.empty()) {
-                                    if (vals[0] == 0) {
+                                size_t v_idx = 0;
+                                while (v_idx < vals.size()) {
+                                    int val = vals[v_idx];
+                                    if (val == 0) {
                                         fg = ftxui::Color::Default;
                                         bg = ftxui::Color::Default;
-                                    } else if (vals[0] == 39) {
+                                        v_idx++;
+                                    } else if (val == 39) {
                                         fg = ftxui::Color::Default;
-                                    } else if (vals[0] == 49) {
+                                        v_idx++;
+                                    } else if (val == 49) {
                                         bg = ftxui::Color::Default;
-                                    } else if (vals[0] == 38 && vals.size() >= 5 && vals[1] == 2) {
-                                        fg = ftxui::Color::RGB(vals[2], vals[3], vals[4]);
-                                    } else if (vals[0] == 48 && vals.size() >= 5 && vals[1] == 2) {
-                                        bg = ftxui::Color::RGB(vals[2], vals[3], vals[4]);
+                                        v_idx++;
+                                    } else if (val == 38 && v_idx + 4 < vals.size() && vals[v_idx+1] == 2) {
+                                        fg = ftxui::Color::RGB(vals[v_idx+2], vals[v_idx+3], vals[v_idx+4]);
+                                        v_idx += 5;
+                                    } else if (val == 48 && v_idx + 4 < vals.size() && vals[v_idx+1] == 2) {
+                                        bg = ftxui::Color::RGB(vals[v_idx+2], vals[v_idx+3], vals[v_idx+4]);
+                                        v_idx += 5;
+                                    } else {
+                                        v_idx++;
                                     }
                                 }
                             }

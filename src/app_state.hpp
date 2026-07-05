@@ -4,6 +4,8 @@
 #include <mutex>
 #include <filesystem>
 #include <atomic>
+#include <ftxui/dom/elements.hpp>
+
 
 struct AppState {
     std::string search_query = "";
@@ -19,6 +21,7 @@ struct AppState {
     std::filesystem::path current_path = "";
     std::vector<std::filesystem::path> current_files; // Filtered files for pane 2
     
+    ftxui::Element preview_element = ftxui::text("");
     std::string preview_content = "";
     
     // Threading

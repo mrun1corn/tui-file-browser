@@ -139,30 +139,65 @@ public:
         int avail_h = box_.y_max - box_.y_min + 1;
         if (avail_w <= 0 || avail_h <= 0) return;
 
-        float scale_w = (float)avail_w / width;
-        float scale_h = (float)(avail_h * 2) / height;
-        float scale = std::min(scale_w, scale_h);
-        
-        int draw_w = std::max(1, (int)(width * scale));
-        int draw_h = std::max(1, (int)(height * scale));
-        int draw_h_chars = (draw_h + 1) / 2;
+        if (avail_w != cached_avail_w || avail_h != cached_avail_h) {
+            cached_avail_w = avail_w;
+            cached_avail_h = avail_h;
+            
+            float scale_w = (float)avail_w / width;
+            float scale_h = (float)(avail_h * 2) / height;
+            float scale = std::min(scale_w, scale_h);
+            
+            draw_w = std::max(1, (int)(width * scale));
+            draw_h = std::max(1, (int)(height * scale));
+            draw_h_chars = (draw_h + 1) / 2;
+
+            cached_colors.clear();
+            cached_colors.reserve(draw_w * draw_h_chars);
+
+            for (int y = 0; y < draw_h_chars; ++y) {
+                for (int x = 0; x < draw_w; ++x) {
+                    auto get_avg_color = [&](int py) {
+                        int start_x = (int)(x / scale);
+                        int end_x = (int)((x + 1) / scale);
+                        int start_y = (int)(py / scale);
+                        int end_y = (int)((py + 1) / scale);
+
+                        end_x = std::min(end_x, width);
+                        end_y = std::min(end_y, height);
+                        if (start_x >= end_x) end_x = start_x + 1;
+                        if (start_y >= end_y) end_y = start_y + 1;
+
+                        long long r = 0, g = 0, b = 0;
+                        int count = 0;
+                        for (int sy = start_y; sy < end_y; ++sy) {
+                            for (int sx = start_x; sx < end_x; ++sx) {
+                                int idx = (sy * width + sx) * 3;
+                                r += img_data[idx];
+                                g += img_data[idx+1];
+                                b += img_data[idx+2];
+                                count++;
+                            }
+                        }
+                        if (count > 0) return ftxui::Color::RGB(r/count, g/count, b/count);
+                        return ftxui::Color::RGB(0,0,0);
+                    };
+
+                    cached_colors.push_back({get_avg_color(y * 2), get_avg_color(y * 2 + 1)});
+                }
+            }
+        }
 
         int offset_x = box_.x_min + (avail_w - draw_w) / 2;
         int offset_y = box_.y_min + (avail_h - draw_h_chars) / 2;
 
+        int i = 0;
         for (int y = 0; y < draw_h_chars; ++y) {
             for (int x = 0; x < draw_w; ++x) {
-                int src_x = std::min((int)(x / scale), width - 1);
-                int src_y1 = std::min((int)(y * 2 / scale), height - 1);
-                int src_y2 = std::min((int)((y * 2 + 1) / scale), height - 1);
-                
-                int idx1 = (src_y1 * width + src_x) * 3;
-                int idx2 = (src_y2 * width + src_x) * 3;
-
                 auto& pixel = screen.PixelAt(offset_x + x, offset_y + y);
                 pixel.character = "▀";
-                pixel.foreground_color = ftxui::Color::RGB(img_data[idx1], img_data[idx1+1], img_data[idx1+2]);
-                pixel.background_color = ftxui::Color::RGB(img_data[idx2], img_data[idx2+1], img_data[idx2+2]);
+                pixel.foreground_color = cached_colors[i].first;
+                pixel.background_color = cached_colors[i].second;
+                i++;
             }
         }
     }
@@ -170,6 +205,12 @@ public:
 private:
     int width, height;
     std::vector<unsigned char> img_data;
+    
+    int cached_avail_w = 0;
+    int cached_avail_h = 0;
+    int draw_w = 0, draw_h = 0, draw_h_chars = 0;
+    std::vector<std::pair<ftxui::Color, ftxui::Color>> cached_colors;
+private:
 };
 
 ftxui::Element Previewer::preview_image(const std::filesystem::path& path) {

@@ -125,10 +125,16 @@ ftxui::Element Previewer::preview_pdf(const std::filesystem::path& path) {
     return ftxui::vbox(std::move(lines));
 }
 
+struct CustomPixel {
+    std::string character = " ";
+    ftxui::Color fg = ftxui::Color::Default;
+    ftxui::Color bg = ftxui::Color::Default;
+};
+
 class ImageElement : public ftxui::Node {
 public:
-    ImageElement(int w, int h, std::vector<unsigned char> data) 
-        : width(w), height(h), img_data(std::move(data)) {}
+    ImageElement(int w, int h, std::vector<unsigned char> data, std::filesystem::path p) 
+        : width(w), height(h), img_data(std::move(data)), path(std::move(p)) {}
 
     void ComputeRequirement() override {
         requirement_.min_x = 10;
@@ -147,49 +153,148 @@ public:
         if (avail_w != cached_avail_w || avail_h != cached_avail_h) {
             cached_avail_w = avail_w;
             cached_avail_h = avail_h;
-            
-            float scale_w = (float)avail_w / width;
-            float scale_h = (float)(avail_h * 2) / height;
-            float scale = std::min(scale_w, scale_h);
-            
-            draw_w = std::max(1, (int)(width * scale));
-            draw_h = std::max(1, (int)(height * scale));
-            draw_h_chars = (draw_h + 1) / 2;
-            int target_h_pixels = draw_h_chars * 2; // ensure even height for half-blocks
+            chafa_success = false;
 
-            cached_colors.clear();
-            cached_colors.reserve(draw_w * draw_h_chars);
+            // Try running chafa.exe first
+#ifdef _WIN32
+            std::string cmd = "chafa.exe --colors 24 --symbols vhalf+quad -s " + std::to_string(avail_w) + "x" + std::to_string(avail_h) + " \"" + path.string() + "\" 2>nul";
+#else
+            std::string cmd = "chafa --colors 24 --symbols vhalf+quad -s " + std::to_string(avail_w) + "x" + std::to_string(avail_h) + " \"" + path.string() + "\" 2>/dev/null";
+#endif
+            FILE* pipe = popen(cmd.c_str(), "r");
+            if (pipe) {
+                std::vector<std::vector<CustomPixel>> temp_grid;
+                std::vector<CustomPixel> current_row;
+                ftxui::Color fg = ftxui::Color::Default;
+                ftxui::Color bg = ftxui::Color::Default;
+                
+                char buf[1024];
+                std::string output;
+                while (fgets(buf, sizeof(buf), pipe) != nullptr) {
+                    output += buf;
+                }
+                pclose(pipe);
 
-            // Use high-quality resizing library
-            std::vector<unsigned char> resized_data(draw_w * target_h_pixels * 3);
-            stbir_resize_uint8_linear(img_data.data(), width, height, 0,
-                                      resized_data.data(), draw_w, target_h_pixels, 0,
-                                      STBIR_RGB);
+                if (!output.empty()) {
+                    chafa_success = true;
+                    size_t i = 0;
+                    while (i < output.size()) {
+                        if (output[i] == '\033' && i + 1 < output.size() && output[i+1] == '[') {
+                            i += 2;
+                            std::string code;
+                            while (i < output.size() && output[i] != 'm') {
+                                code += output[i];
+                                i++;
+                            }
+                            i++; // skip 'm'
+                            
+                            std::stringstream ss(code);
+                            std::string token;
+                            std::vector<int> vals;
+                            while (std::getline(ss, token, ';')) {
+                                try { vals.push_back(std::stoi(token)); } catch(...) {}
+                            }
+                            if (vals.empty()) continue;
+                            
+                            if (vals[0] == 0) {
+                                fg = ftxui::Color::Default;
+                                bg = ftxui::Color::Default;
+                            } else if (vals[0] == 39) {
+                                fg = ftxui::Color::Default;
+                            } else if (vals[0] == 49) {
+                                bg = ftxui::Color::Default;
+                            } else if (vals[0] == 38 && vals.size() >= 5 && vals[1] == 2) {
+                                fg = ftxui::Color::RGB(vals[2], vals[3], vals[4]);
+                            } else if (vals[0] == 48 && vals.size() >= 5 && vals[1] == 2) {
+                                bg = ftxui::Color::RGB(vals[2], vals[3], vals[4]);
+                            }
+                        } else if (output[i] == '\n') {
+                            temp_grid.push_back(std::move(current_row));
+                            current_row = std::vector<CustomPixel>();
+                            i++;
+                        } else {
+                            unsigned char c = output[i];
+                            size_t len = 1;
+                            if ((c & 0x80) == 0) len = 1;
+                            else if ((c & 0xE0) == 0xC0) len = 2;
+                            else if ((c & 0xF0) == 0xE0) len = 3;
+                            else if ((c & 0xF8) == 0xF0) len = 4;
+                            
+                            if (i + len <= output.size()) {
+                                std::string utf8_char = output.substr(i, len);
+                                current_row.push_back({utf8_char, fg, bg});
+                                i += len;
+                            } else {
+                                i++;
+                            }
+                        }
+                    }
+                    if (!current_row.empty()) {
+                        temp_grid.push_back(std::move(current_row));
+                    }
+                    cached_pixels = std::move(temp_grid);
+                }
+            }
 
-            for (int y = 0; y < draw_h_chars; ++y) {
-                for (int x = 0; x < draw_w; ++x) {
-                    int idx1 = (y * 2 * draw_w + x) * 3;
-                    int idx2 = ((y * 2 + 1) * draw_w + x) * 3;
+            // Fallback to stb_image_resize if chafa failed or isn't installed
+            if (!chafa_success) {
+                float scale_w = (float)avail_w / width;
+                float scale_h = (float)(avail_h * 2) / height;
+                float scale = std::min(scale_w, scale_h);
+                
+                draw_w = std::max(1, (int)(width * scale));
+                draw_h = std::max(1, (int)(height * scale));
+                draw_h_chars = (draw_h + 1) / 2;
+                int target_h_pixels = draw_h_chars * 2;
 
-                    auto color1 = ftxui::Color::RGB(resized_data[idx1], resized_data[idx1+1], resized_data[idx1+2]);
-                    auto color2 = ftxui::Color::RGB(resized_data[idx2], resized_data[idx2+1], resized_data[idx2+2]);
+                cached_colors.clear();
+                cached_colors.reserve(draw_w * draw_h_chars);
 
-                    cached_colors.push_back({color1, color2});
+                std::vector<unsigned char> resized_data(draw_w * target_h_pixels * 3);
+                stbir_resize_uint8_linear(img_data.data(), width, height, 0,
+                                          resized_data.data(), draw_w, target_h_pixels, 0,
+                                          STBIR_RGB);
+
+                for (int y = 0; y < draw_h_chars; ++y) {
+                    for (int x = 0; x < draw_w; ++x) {
+                        int idx1 = (y * 2 * draw_w + x) * 3;
+                        int idx2 = ((y * 2 + 1) * draw_w + x) * 3;
+
+                        auto color1 = ftxui::Color::RGB(resized_data[idx1], resized_data[idx1+1], resized_data[idx1+2]);
+                        auto color2 = ftxui::Color::RGB(resized_data[idx2], resized_data[idx2+1], resized_data[idx2+2]);
+
+                        cached_colors.push_back({color1, color2});
+                    }
                 }
             }
         }
 
-        int offset_x = box_.x_min + (avail_w - draw_w) / 2;
-        int offset_y = box_.y_min + (avail_h - draw_h_chars) / 2;
-
-        int i = 0;
-        for (int y = 0; y < draw_h_chars; ++y) {
-            for (int x = 0; x < draw_w; ++x) {
-                auto& pixel = screen.PixelAt(offset_x + x, offset_y + y);
-                pixel.character = "▀";
-                pixel.foreground_color = cached_colors[i].first;
-                pixel.background_color = cached_colors[i].second;
-                i++;
+        if (chafa_success) {
+            int draw_h_chars = cached_pixels.size();
+            int draw_w = draw_h_chars > 0 ? cached_pixels[0].size() : 0;
+            int offset_x = box_.x_min + (avail_w - draw_w) / 2;
+            int offset_y = box_.y_min + (avail_h - draw_h_chars) / 2;
+            
+            for (int y = 0; y < draw_h_chars && y + offset_y <= box_.y_max; ++y) {
+                for (int x = 0; x < (int)cached_pixels[y].size() && x + offset_x <= box_.x_max; ++x) {
+                    auto& pixel = screen.PixelAt(offset_x + x, offset_y + y);
+                    pixel.character = cached_pixels[y][x].character;
+                    pixel.foreground_color = cached_pixels[y][x].fg;
+                    pixel.background_color = cached_pixels[y][x].bg;
+                }
+            }
+        } else {
+            int offset_x = box_.x_min + (avail_w - draw_w) / 2;
+            int offset_y = box_.y_min + (avail_h - draw_h_chars) / 2;
+            int i = 0;
+            for (int y = 0; y < draw_h_chars; ++y) {
+                for (int x = 0; x < draw_w; ++x) {
+                    auto& pixel = screen.PixelAt(offset_x + x, offset_y + y);
+                    pixel.character = "▀";
+                    pixel.foreground_color = cached_colors[i].first;
+                    pixel.background_color = cached_colors[i].second;
+                    i++;
+                }
             }
         }
     }
@@ -197,12 +302,14 @@ public:
 private:
     int width, height;
     std::vector<unsigned char> img_data;
+    std::filesystem::path path;
     
     int cached_avail_w = 0;
     int cached_avail_h = 0;
     int draw_w = 0, draw_h = 0, draw_h_chars = 0;
+    bool chafa_success = false;
     std::vector<std::pair<ftxui::Color, ftxui::Color>> cached_colors;
-private:
+    std::vector<std::vector<CustomPixel>> cached_pixels;
 };
 
 ftxui::Element Previewer::preview_image(const std::filesystem::path& path) {
@@ -213,9 +320,7 @@ ftxui::Element Previewer::preview_image(const std::filesystem::path& path) {
     }
 
     std::vector<unsigned char> img_vec(data, data + (width * height * 3));
-    stbi_image_free(data);
-    
-    auto img_node = std::make_shared<ImageElement>(width, height, std::move(img_vec));
+    auto img_node = std::make_shared<ImageElement>(width, height, std::move(img_vec), path);
     auto info = ftxui::text("Image: " + std::to_string(width) + "x" + std::to_string(height));
     return ftxui::vbox({info, ftxui::separatorEmpty(), ftxui::Element(img_node) | ftxui::flex}) | ftxui::flex;
 }

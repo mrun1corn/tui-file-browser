@@ -33,7 +33,8 @@ bool is_binary_file(const std::filesystem::path& path) {
     return false;
 }
 
-ftxui::Element Previewer::generate_preview(const std::filesystem::path& path) {
+ftxui::Element Previewer::generate_preview(const std::filesystem::path& path, bool& is_image) {
+    is_image = false; // default
     LOG("generate_preview called for: " + path.u8string());
     std::error_code ec;
     if (!std::filesystem::exists(path, ec)) {
@@ -49,6 +50,7 @@ ftxui::Element Previewer::generate_preview(const std::filesystem::path& path) {
     std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
 
     if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp" || ext == ".gif") {
+        is_image = true;
         return preview_image(path);
     }
 

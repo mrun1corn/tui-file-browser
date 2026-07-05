@@ -5,7 +5,7 @@
 
 class Previewer {
 public:
-    static ftxui::Element generate_preview(const std::filesystem::path& path);
+    static ftxui::Element generate_preview(const std::filesystem::path& path, bool& is_image);
 
 private:
     static ftxui::Element preview_text(const std::filesystem::path& path);

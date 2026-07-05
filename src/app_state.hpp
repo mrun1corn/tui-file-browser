@@ -22,6 +22,7 @@ struct AppState {
     std::vector<std::filesystem::path> current_files; // Filtered files for pane 2
     
     ftxui::Element preview_element = ftxui::text("");
+    bool is_image_preview = false;
     std::string preview_content = "";
     
     // Threading

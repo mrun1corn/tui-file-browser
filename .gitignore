@@ -2,3 +2,8 @@ build/
 .cache/
 *.exe
 .DS_Store
+*.zip
+chafa-*/
+xpdf-tools-*/
+dummy.pdf
+tui_browser.log

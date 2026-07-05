@@ -1,9 +1,7 @@
+#define NOMINMAX
 #include "logger.hpp"
 #include "previewer.hpp"
 #include "process_manager.hpp"
-#ifdef RGB
-#undef RGB
-#endif
 #include <fstream>
 #include <iostream>
 #include <array>
@@ -14,6 +12,17 @@
 #include <ftxui/screen/screen.hpp>
 #include <mutex>
 #include <thread>
+
+#ifdef min
+#undef min
+#endif
+#ifdef max
+#undef max
+#endif
+
+#ifdef RGB
+#undef RGB
+#endif
 #include <atomic>
 
 #define STB_IMAGE_IMPLEMENTATION
@@ -28,7 +37,6 @@
 #define pclose _pclose
 #endif
 
-// We track the currently selected file for preview to allow background threads to cancel if the selection changes
 std::mutex active_preview_mtx;
 std::filesystem::path active_preview_path;
 
@@ -55,11 +63,9 @@ std::string find_chafa_path() {
 
 std::string find_ffmpeg_path() {
     std::error_code ec;
-    // Check local directories first
     if (std::filesystem::exists("ffmpeg.exe", ec)) return "ffmpeg.exe";
     if (std::filesystem::exists("build/Release/ffmpeg.exe", ec)) return "build/Release/ffmpeg.exe";
     
-    // Check winget links
     char* user_profile = std::getenv("USERPROFILE");
     if (user_profile) {
         std::filesystem::path winget_link = std::filesystem::path(user_profile) / "AppData" / "Local" / "Microsoft" / "WinGet" / "Links" / "ffmpeg.exe";
@@ -67,8 +73,7 @@ std::string find_ffmpeg_path() {
             return "\"" + winget_link.string() + "\"";
         }
     }
-    
-    return "ffmpeg"; // Fallback to PATH
+    return "ffmpeg";
 }
 
 std::string find_ffprobe_path() {
@@ -83,8 +88,7 @@ std::string find_ffprobe_path() {
             return "\"" + winget_link.string() + "\"";
         }
     }
-    
-    return "ffprobe"; // Fallback to PATH
+    return "ffprobe";
 }
 
 struct CustomPixel {
@@ -301,7 +305,7 @@ ftxui::Element Previewer::generate_preview(const std::filesystem::path& path, bo
 
     if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp" || ext == ".gif") {
         is_image = true;
-        return preview_image(path);
+        return preview_image(path, redraw_cb);
     }
 
     if (ext == ".mp4" || ext == ".mkv" || ext == ".avi" || ext == ".mov" || ext == ".wmv" || ext == ".flv") {
@@ -384,7 +388,7 @@ ftxui::Element Previewer::preview_pdf(const std::filesystem::path& path) {
     return ftxui::vbox(std::move(lines));
 }
 
-ftxui::Element Previewer::preview_image(const std::filesystem::path& path) {
+ftxui::Element render_image_pixels(const std::filesystem::path& path, int orig_w, int orig_h) {
     int width, height, channels;
     unsigned char* data = stbi_load(path.u8string().c_str(), &width, &height, &channels, 3);
     if (!data) {
@@ -395,14 +399,60 @@ ftxui::Element Previewer::preview_image(const std::filesystem::path& path) {
     stbi_image_free(data);
     
     auto img_node = std::make_shared<ImageElement>(width, height, std::move(img_vec), path);
-    auto info = ftxui::text("Image: " + std::to_string(width) + "x" + std::to_string(height));
+    auto info = ftxui::text("Image: " + std::to_string(orig_w) + "x" + std::to_string(orig_h));
     return ftxui::vbox({info, ftxui::separatorEmpty(), ftxui::Element(img_node) | ftxui::flex}) | ftxui::flex;
+}
+
+ftxui::Element Previewer::preview_image(const std::filesystem::path& path, std::function<void()> redraw_cb) {
+    std::error_code ec;
+    
+    size_t path_hash = std::hash<std::string>{}(path.string());
+    auto mtime = std::filesystem::last_write_time(path, ec).time_since_epoch().count();
+    
+    std::string thumb_name = std::to_string(path_hash) + "_" + std::to_string(mtime) + ".jpg";
+    std::filesystem::path temp_dir = std::filesystem::temp_directory_path() / "tui_thumbs";
+    std::filesystem::create_directories(temp_dir, ec);
+    std::filesystem::path thumb_path = temp_dir / thumb_name;
+
+    int orig_w = 0, orig_h = 0, orig_channels = 0;
+    stbi_info(path.u8string().c_str(), &orig_w, &orig_h, &orig_channels);
+
+    if (std::filesystem::exists(thumb_path, ec)) {
+        return render_image_pixels(thumb_path, orig_w, orig_h);
+    }
+
+    std::thread([path, thumb_path, redraw_cb]() {
+        std::this_thread::sleep_for(std::chrono::milliseconds(150));
+        
+        {
+            std::lock_guard<std::mutex> lock(active_preview_mtx);
+            if (active_preview_path != path) {
+                return;
+            }
+        }
+
+        std::string ffmpeg_bin = find_ffmpeg_path();
+        LOG("ImagePreview: Launching ffmpeg thumbnail generation...");
+        
+        std::string cmd = ffmpeg_bin + " -y -i \"" + path.string() + "\" -vf \"scale=160:-1\" \"" + thumb_path.string() + "\" -loglevel quiet";
+        
+        bool success = ProcessManager::get_instance().spawn_sync(cmd);
+        
+        {
+            std::lock_guard<std::mutex> lock(active_preview_mtx);
+            if (active_preview_path == path && success) {
+                LOG("ImagePreview: Thumbnail generation finished. Requesting redraw.");
+                if (redraw_cb) redraw_cb();
+            }
+        }
+    }).detach();
+
+    return ftxui::text("Generating image thumbnail...");
 }
 
 ftxui::Element Previewer::preview_video(const std::filesystem::path& path, std::function<void()> redraw_cb) {
     std::error_code ec;
     
-    // Hash key based on path and write time
     size_t path_hash = std::hash<std::string>{}(path.string());
     auto mtime = std::filesystem::last_write_time(path, ec).time_since_epoch().count();
     
@@ -412,18 +462,15 @@ ftxui::Element Previewer::preview_video(const std::filesystem::path& path, std::
     std::filesystem::path thumb_path = temp_dir / thumb_name;
 
     if (std::filesystem::exists(thumb_path, ec)) {
-        return preview_image(thumb_path);
+        return render_image_pixels(thumb_path, 320, 240);
     }
 
-    // Thumbnail doesn't exist. Trigger async extraction with debounce
     std::thread([path, thumb_path, redraw_cb]() {
-        // 150ms debounce
         std::this_thread::sleep_for(std::chrono::milliseconds(150));
         
         {
             std::lock_guard<std::mutex> lock(active_preview_mtx);
             if (active_preview_path != path) {
-                // User navigated away during the debounce period. Abort.
                 return;
             }
         }
@@ -431,8 +478,7 @@ ftxui::Element Previewer::preview_video(const std::filesystem::path& path, std::
         std::string ffmpeg_bin = find_ffmpeg_path();
         LOG("VideoPreview: Launching ffmpeg frame extraction...");
         
-        // Command to extract frame at 1s mark
-        std::string cmd = ffmpeg_bin + " -y -ss 00:00:01 -i \"" + path.string() + "\" -vframes 1 -f image2 \"" + thumb_path.string() + "\" -loglevel quiet";
+        std::string cmd = ffmpeg_bin + " -y -ss 00:00:01 -i \"" + path.string() + "\" -vframes 1 -f image2 -vf \"scale=160:-1\" \"" + thumb_path.string() + "\" -loglevel quiet";
         
         bool success = ProcessManager::get_instance().spawn_sync(cmd);
         
@@ -448,180 +494,86 @@ ftxui::Element Previewer::preview_video(const std::filesystem::path& path, std::
     return ftxui::text("Extracting video thumbnail...");
 }
 
-namespace {
-std::string extract_json_value(const std::string& json, const std::string& key) {
-    std::string search_key = "\"" + key + "\"";
-    size_t pos = json.find(search_key);
-    if (pos == std::string::npos) {
-        return "";
-    }
-    pos = json.find(":", pos + search_key.length());
-    if (pos == std::string::npos) {
-        return "";
-    }
-    pos++;
-    while (pos < json.length() && (json[pos] == ' ' || json[pos] == '\t' || json[pos] == '\r' || json[pos] == '\n')) {
-        pos++;
-    }
-    if (pos >= json.length()) {
-        return "";
-    }
-    if (json[pos] == '"') {
-        pos++; // Skip the quote
-        std::string val;
-        while (pos < json.length()) {
-            if (json[pos] == '\\' && pos + 1 < json.length() && json[pos+1] == '"') {
-                val += '"';
-                pos += 2;
-            } else if (json[pos] == '"') {
-                break;
-            } else {
-                val += json[pos];
-                pos++;
-            }
-        }
-        return val;
-    } else {
-        size_t end_pos = pos;
-        while (end_pos < json.length() && json[end_pos] != ',' && json[end_pos] != '}' && json[end_pos] != ']' && json[end_pos] != '\n' && json[end_pos] != '\r') {
-            end_pos++;
-        }
-        size_t last = end_pos;
-        while (last > pos && (json[last - 1] == ' ' || json[last - 1] == '\t')) {
-            last--;
-        }
-        return json.substr(pos, last - pos);
-    }
-}
-
-std::string format_duration(const std::string& duration_str) {
-    if (duration_str.empty()) return "00:00";
-    try {
-        double seconds = std::stod(duration_str);
-        int total_seconds = static_cast<int>(seconds);
-        int minutes = total_seconds / 60;
-        int secs = total_seconds % 60;
-        char buf[32];
-        snprintf(buf, sizeof(buf), "%02d:%02d", minutes, secs);
-        return std::string(buf);
-    } catch (...) {
-        return "00:00";
-    }
-}
-
-std::string format_bitrate(const std::string& bitrate_str) {
-    if (bitrate_str.empty()) return "N/A";
-    try {
-        long long br = std::stoll(bitrate_str);
-        return std::to_string(br / 1000) + " kbps";
-    } catch (...) {
-        return bitrate_str + " bps";
-    }
-}
-
-std::string format_sample_rate(const std::string& sr_str) {
-    if (sr_str.empty()) return "N/A";
-    try {
-        int sr = std::stoi(sr_str);
-        if (sr >= 1000) {
-            double khz = sr / 1000.0;
-            char buf[32];
-            snprintf(buf, sizeof(buf), "%.1f kHz", khz);
-            return std::string(buf);
-        }
-        return std::to_string(sr) + " Hz";
-    } catch (...) {
-        return sr_str + " Hz";
-    }
-}
-} // namespace
-
 ftxui::Element Previewer::preview_audio(const std::filesystem::path& path) {
     std::string ffprobe_bin = find_ffprobe_path();
-    LOG("preview_audio: path: " + path.string());
-    LOG("preview_audio: ffprobe_bin: " + ffprobe_bin);
-#ifdef _WIN32
-    std::string cmd = ffprobe_bin + " -v quiet -print_format json -show_format -show_streams \"" + path.string() + "\" 2>nul";
-    cmd = "\"" + cmd + "\"";
-#else
-    std::string cmd = ffprobe_bin + " -v quiet -print_format json -show_format -show_streams \"" + path.string() + "\" 2>/dev/null";
-#endif
-    LOG("preview_audio: running command: " + cmd);
-
+    std::string cmd = ffprobe_bin + " -v quiet -print_format json -show_format -show_streams \"" + path.string() + "\"";
+    
     std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(cmd.c_str(), "r"), pclose);
     if (!pipe) {
-        LOG("preview_audio: popen failed!");
-        return ftxui::text("Failed to run ffprobe on " + path.filename().string());
+        return ftxui::text("Failed to run ffprobe");
     }
-
-    std::string json;
-    std::array<char, 512> buffer;
-    while (fgets(buffer.data(), static_cast<int>(buffer.size()), pipe.get()) != nullptr) {
-        json += buffer.data();
-        if (json.size() > 1024 * 100) {
-            break;
+    
+    char buf[1024];
+    std::string output;
+    while (fgets(buf, sizeof(buf), pipe.get()) != nullptr) {
+        output += buf;
+    }
+    
+    auto extract_json_value = [](const std::string& json, const std::string& key) -> std::string {
+        size_t pos = json.find("\"" + key + "\":");
+        if (pos == std::string::npos) return "Unknown";
+        pos = json.find("\"", pos + key.size() + 3);
+        if (pos == std::string::npos) {
+            pos = json.find(":", pos - 5);
+            size_t end_pos = json.find_first_of(",\n}", pos);
+            if (pos == std::string::npos || end_pos == std::string::npos) return "Unknown";
+            std::string num = json.substr(pos + 1, end_pos - pos - 1);
+            num.erase(std::remove_if(num.begin(), num.end(), ::isspace), num.end());
+            return num;
         }
-    }
-    LOG("preview_audio: read json size: " + std::to_string(json.size()));
+        size_t end_pos = json.find("\"", pos + 1);
+        if (end_pos == std::string::npos) return "Unknown";
+        return json.substr(pos + 1, end_pos - pos - 1);
+    };
 
-    if (json.empty()) {
-        return ftxui::vbox({
-            ftxui::text("Audio File: " + path.filename().string()) | ftxui::bold,
-            ftxui::text("Format: Unknown (No metadata returned)")
-        });
-    }
+    std::string title = extract_json_value(output, "title");
+    std::string artist = extract_json_value(output, "artist");
+    std::string album = extract_json_value(output, "album");
+    std::string duration_str = extract_json_value(output, "duration");
+    std::string bitrate_str = extract_json_value(output, "bit_rate");
+    std::string sample_str = extract_json_value(output, "sample_rate");
+    std::string format_long = extract_json_value(output, "format_long_name");
+    std::string codec_name = extract_json_value(output, "codec_name");
 
-    std::string title = extract_json_value(json, "title");
-    if (title.empty()) title = path.stem().string();
+    if (title == "Unknown") title = path.stem().string();
 
-    std::string artist = extract_json_value(json, "artist");
-    if (artist.empty()) artist = "Unknown Artist";
+    std::string duration = "Unknown";
+    try {
+        double d = std::stod(duration_str);
+        int mins = (int)(d / 60);
+        int secs = (int)d % 60;
+        char time_buf[16];
+        snprintf(time_buf, sizeof(time_buf), "%02d:%02d", mins, secs);
+        duration = time_buf;
+    } catch (...) {}
 
-    std::string album = extract_json_value(json, "album");
-    if (album.empty()) album = "Unknown Album";
+    std::string bitrate = "Unknown";
+    try {
+        int br = std::stoi(bitrate_str);
+        bitrate = std::to_string(br / 1000) + " kbps";
+    } catch (...) {}
 
-    std::string duration_raw = extract_json_value(json, "duration");
-    std::string duration_formatted = format_duration(duration_raw);
+    std::string sample_rate = "Unknown";
+    try {
+        int sr = std::stoi(sample_str);
+        sample_rate = std::to_string(sr / 1000) + "." + std::to_string((sr % 1000) / 100) + " kHz";
+    } catch (...) {}
 
-    std::string bitrate_raw = extract_json_value(json, "bit_rate");
-    std::string bitrate_formatted = format_bitrate(bitrate_raw);
+    ftxui::Elements meta = {
+        ftxui::text("Audio Metadata") | ftxui::bold,
+        ftxui::separator(),
+        ftxui::hbox(ftxui::text("Title:       "), ftxui::text(title)),
+        ftxui::hbox(ftxui::text("Artist:      "), ftxui::text(artist)),
+        ftxui::hbox(ftxui::text("Album:      "), ftxui::text(album)),
+        ftxui::hbox(ftxui::text("Duration:    "), ftxui::text(duration)),
+        ftxui::hbox(ftxui::text("Format:      "), ftxui::text(format_long)),
+        ftxui::hbox(ftxui::text("Codec:      "), ftxui::text(codec_name)),
+        ftxui::hbox(ftxui::text("Bitrate:     "), ftxui::text(bitrate)),
+        ftxui::hbox(ftxui::text("Sample Rate: "), ftxui::text(sample_rate))
+    };
 
-    std::string sample_rate_raw = extract_json_value(json, "sample_rate");
-    std::string sample_rate_formatted = format_sample_rate(sample_rate_raw);
-
-    std::string format_long = extract_json_value(json, "format_long_name");
-    if (format_long.empty()) {
-        format_long = extract_json_value(json, "format_name");
-    }
-    if (format_long.empty()) {
-        std::string ext = path.extension().string();
-        if (!ext.empty() && ext[0] == '.') ext = ext.substr(1);
-        std::transform(ext.begin(), ext.end(), ext.begin(), ::toupper);
-        format_long = ext + " Audio";
-    }
-
-    std::string codec_long = extract_json_value(json, "codec_long_name");
-    if (codec_long.empty()) {
-        codec_long = extract_json_value(json, "codec_name");
-    }
-
-    ftxui::Elements elements;
-    elements.push_back(ftxui::text("Audio Metadata") | ftxui::bold);
-    elements.push_back(ftxui::separator());
-    elements.push_back(ftxui::hbox(ftxui::text("Title:       "), ftxui::text(title) | ftxui::bold));
-    elements.push_back(ftxui::hbox(ftxui::text("Artist:      "), ftxui::text(artist)));
-    elements.push_back(ftxui::hbox(ftxui::text("Album:       "), ftxui::text(album)));
-    elements.push_back(ftxui::hbox(ftxui::text("Duration:    "), ftxui::text(duration_formatted)));
-    elements.push_back(ftxui::hbox(ftxui::text("Format:      "), ftxui::text(format_long)));
-    if (!codec_long.empty()) {
-        elements.push_back(ftxui::hbox(ftxui::text("Codec:       "), ftxui::text(codec_long)));
-    }
-    elements.push_back(ftxui::hbox(ftxui::text("Bitrate:     "), ftxui::text(bitrate_formatted)));
-    elements.push_back(ftxui::hbox(ftxui::text("Sample Rate: "), ftxui::text(sample_rate_formatted)));
-
-    return ftxui::vbox(std::move(elements));
+    return ftxui::vbox(std::move(meta));
 }
-
 
 ftxui::Element Previewer::preview_directory(const std::filesystem::path& path) {
     int item_count = 0;

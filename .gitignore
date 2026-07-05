@@ -1,0 +1,4 @@
+build/
+.cache/
+*.exe
+.DS_Store
